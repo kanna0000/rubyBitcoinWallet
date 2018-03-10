@@ -1,6 +1,7 @@
 require 'bitcoin'
-require 'open-uri'
 require 'json'
+require 'typhoeus'
+require 'pp'
 include Bitcoin::Builder
 
 # use testnet so you don't accidentally blow your whole money!
@@ -41,14 +42,14 @@ key = Bitcoin::Key.new(priv_key, pub_key)
 
 # create transaction
 # get unspent tx outputs
-prev_tx = JSON.parse(open("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}?unspentOnly=true").read)
+prev_tx = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}?unspentOnly=true").body)
 prev_hash = prev_tx["txrefs"][0]["tx_hash"]
 
 # hex tx to binary tx
-prev_tx_hex = JSON.parse(open("https://api.blockcypher.com/v1/btc/test3/txs/#{prev_hash}?includeHex=true").read)["hex"]
+prev_tx_hex = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/txs/#{prev_hash}?includeHex=true").body)["hex"]
 prev_tx_bin = Bitcoin::P::Tx.new([prev_tx_hex].pack('H*'))
 prev_out_index = prev_tx["txrefs"][0]["tx_output_n"]
-balance = JSON.parse(open("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}/balance").read)["balance"]
+balance = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}/balance").body)["balance"]
 
 send_amount = 1000000 # satoshis = 0.01 BTC
 fee_amount = 100000
@@ -73,5 +74,11 @@ new_tx = build_tx do |t|
   end
 end
 
-# broadcast this
-puts new_tx.to_payload.unpack("H*")[0]
+# broadcast
+body = {tx: "#{new_tx.to_payload.unpack("H*")[0]}"}
+response = Typhoeus.post("https://api.blockcypher.com/v1/btc/test3/txs/push", body: body.to_json)
+
+# debug
+pp "prev_tx: #{prev_tx}"
+pp "prev_hash: #{prev_hash}"
+puts "hex transaction is\n#{new_tx.to_payload.unpack("H*")[0]}"
