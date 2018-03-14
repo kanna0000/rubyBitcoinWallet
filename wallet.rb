@@ -1,13 +1,22 @@
 require 'bitcoin'
-require 'open-uri'
 require 'json'
+require 'typhoeus'
+require 'pp'
+require 'slop'
 include Bitcoin::Builder
 
 # use testnet so you don't accidentally blow your whole money!
 Bitcoin.network = :testnet3
 
+# Slop
+opts = Slop.parse(help: true) do |o|
+    o.string '-t', '--type', 'type of operations'
+    o.bool '--send'
+    o.bool '--show'
+end
+
 # create and save address
-if ARGV[0] == 'generate'
+if opts[:type] == "generate"
   address = Bitcoin::generate_address
   address.each do |item|
     puts item
@@ -18,7 +27,6 @@ if ARGV[0] == 'generate'
 end
 # order => address, private key(hex), publick key(hex), hash160(pubkey)
 
-sender = "mfzqHJ9rAd5ujf5fVt21QZwwU2iCk2yTCR"
 recipient = "mn4YPH7koKLC91LkuVriqtfDhpnAksognW"
 
 # get address from address.txt
@@ -37,41 +45,59 @@ for pack in address_pack
     end
 end
 
-key = Bitcoin::Key.new(priv_key, pub_key)
+if opts[:send]
+    puts "Chose address:"
+    n = 0
+    address_pack.each do |list|
+        puts "#{n.to_s}: #{list[0]}"
+        n += 1
+    end
+    puts "Number:"
+    sender = STDIN.gets.to_i
+    priv_key, pub_key, pub_key_hash160 = address_pack[sender][1], address_pack[sender][2], address_pack[sender][3]
 
-# create transaction
-# get unspent tx outputs
-prev_tx = JSON.parse(open("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}?unspentOnly=true").read)
-prev_hash = prev_tx["txrefs"][0]["tx_hash"]
+    key = Bitcoin::Key.new(priv_key, pub_key)
 
-# hex tx to binary tx
-prev_tx_hex = JSON.parse(open("https://api.blockcypher.com/v1/btc/test3/txs/#{prev_hash}?includeHex=true").read)["hex"]
-prev_tx_bin = Bitcoin::P::Tx.new([prev_tx_hex].pack('H*'))
-prev_out_index = prev_tx["txrefs"][0]["tx_output_n"]
-balance = JSON.parse(open("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}/balance").read)["balance"]
+    # create transaction
+    # get unspent tx outputs
+    prev_tx = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}?unspentOnly=true").body)
+    prev_hash = prev_tx["txrefs"][0]["tx_hash"]
 
-send_amount = 1000000 # satoshis = 0.01 BTC
-fee_amount = 100000
-change = balance - send_amount - fee_amount
+    # hex tx to binary tx
+    prev_tx_hex = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/txs/#{prev_hash}?includeHex=true").body)["hex"]
+    prev_tx_bin = Bitcoin::P::Tx.new([prev_tx_hex].pack('H*'))
+    prev_out_index = prev_tx["txrefs"][0]["tx_output_n"]
+    balance = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}/balance").body)["balance"]
 
-new_tx = build_tx do |t|
-  t.input do |i|
-    i.prev_out prev_tx_bin
-    i.prev_out_index prev_out_index
-    i.signature_key key
-  end
+    send_amount = 1000000 # satoshis = 0.01 BTC
+    fee_amount = 100000
+    change = balance - send_amount - fee_amount
 
-  t.output do |o|
-    o.value send_amount
-    o.script {|s| s.recipient recipient }
-  end
+    new_tx = build_tx do |t|
+      t.input do |i|
+        i.prev_out prev_tx_bin
+        i.prev_out_index prev_out_index
+        i.signature_key key
+      end
 
-  # change
-  t.output do |o|
-   o.value change
-   o.script {|s| s.recipient key.addr }
-  end
+      t.output do |o|
+        o.value send_amount
+        o.script {|s| s.recipient recipient }
+      end
+
+      # change
+      t.output do |o|
+       o.value change
+       o.script {|s| s.recipient key.addr }
+      end
+    end
 end
 
-# broadcast this
-puts new_tx.to_payload.unpack("H*")[0]
+# broadcast
+body = {tx: "#{new_tx.to_payload.unpack("H*")[0]}"}
+response = Typhoeus.post("https://api.blockcypher.com/v1/btc/test3/txs/push", body: body.to_json)
+
+# debug
+pp "prev_tx: #{prev_tx}"
+pp "prev_hash: #{prev_hash}"
+puts "hex transaction is\n#{new_tx.to_payload.unpack("H*")[0]}"
