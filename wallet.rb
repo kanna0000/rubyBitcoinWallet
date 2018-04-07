@@ -3,6 +3,7 @@ require 'json'
 require 'typhoeus'
 require 'pp'
 require 'slop'
+require './wallet/address'
 include Bitcoin::Builder
 
 # use testnet so you don't accidentally blow your whole money!
@@ -37,6 +38,8 @@ File.open('address.txt', 'r') do |file|
         address_pack.push(line.split(','))
     end
 end
+
+sender = Address.new(*address_pack)
 
 for pack in address_pack
     if pack[0] == sender then
@@ -75,8 +78,7 @@ if opts[:send]
 
     new_tx = build_tx do |t|
       t.input do |i|
-        i.prev_out prev_tx_bin
-        i.prev_out_index prev_out_index
+        i.prev_out prev_tx_bin, prev_out_index
         i.signature_key key
       end
 
