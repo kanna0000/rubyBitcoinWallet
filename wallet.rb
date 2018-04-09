@@ -1,10 +1,12 @@
 require 'bitcoin'
+require 'securerandom'
 require 'json'
 require 'typhoeus'
 require 'pp'
 require 'slop'
 require './wallet/address'
 include Bitcoin::Builder
+include Bitcoin
 
 # use testnet so you don't accidentally blow your whole money!
 Bitcoin.network = :testnet3
@@ -14,6 +16,7 @@ opts = Slop.parse(help: true) do |o|
     o.string '-t', '--type', 'type of operations'
     o.bool '--send'
     o.bool '--show'
+    o.bool '--hd'
 end
 
 # create and save address
@@ -27,6 +30,22 @@ if opts[:type] == "generate"
   end
 end
 # order => address, private key(hex), publick key(hex), hash160(pubkey)
+
+# create hd wallet master_key
+if opts[:type] == "generate" && opts[:hd]
+  if !File.exist?("seed.txt")
+    seed = SecureRandom.alphanumeric(512)
+    master_key = ExtKey.generate_master(seed)
+    File.open('seed.txt', 'a') do |file|
+      file.puts seed
+    end
+    first_key = master_key.derive(0)
+    puts "Seed is saved."
+    puts "Master public key is #{master_key.pub}"
+  else
+    puts "You already have a seed."
+  end
+end
 
 recipient = "mn4YPH7koKLC91LkuVriqtfDhpnAksognW"
 
@@ -63,8 +82,8 @@ if opts[:send]
 
     # create transaction
     # get unspent tx outputs
-    prev_tx = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender}?unspentOnly=true").body)
-    prev_hash = prev_tx["txrefs"][0]["tx_hash"]
+    prev_tx = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/addrs/#{sender.address}?unspentOnly=true").body)
+    prev_hash = sender.new_utxo[0]
 
     # hex tx to binary tx
     prev_tx_hex = JSON.parse(Typhoeus.get("https://api.blockcypher.com/v1/btc/test3/txs/#{prev_hash}?includeHex=true").body)["hex"]
